@@ -59,12 +59,13 @@
    police à déployer. Contenu : Segoe UI (police système Windows ; Arial en repli ailleurs).
    Pour changer de police de titres : modifier la règle @font-face et la variable --serif.
 
- REDIMENSIONNEMENT AUTOMATIQUE (optionnel, désactivé)
-   CONFIG.embed.postHeight = true envoie la hauteur du contenu à la page parente
-   via postMessage ({type:'sbm-iframe-height', component, height}). Cela ne
-   fonctionne que si la page parente écoute ce message : le composant
-   « Incorporer » natif de SharePoint ne le fait pas. Sans parent compatible,
-   garder la hauteur fixe.
+ REDIMENSIONNEMENT AUTOMATIQUE (activé)
+   CONFIG.embed.postHeight = true : le composant envoie la hauteur de son contenu à la page
+   parente via postMessage ({type:'sbm-iframe-height', component, height}) et répond à
+   {type:'sbm-request-height'}. Cela ne fonctionne que si la page parente l'écoute : le
+   composant « Incorporer » natif de SharePoint ne le fait pas ; le web part « SBM Embed »
+   (dossier spfx/) le fait. Sans parent compatible, il ne se passe rien : garder la hauteur
+   fixe de l'iframe (voir DIMENSIONS).
 
  LIMITES CONNUES
    - Contenus = exemples à valider par les RH ; aucune règle SBM officielle.
@@ -272,7 +273,7 @@ const CONFIG = {
   contact: { url: '' },
 
   /* Envoi de la hauteur au parent : voir l'en-tête du fichier (nécessite un parent compatible). */
-  embed: { postHeight: false, targetOrigin: '*' }
+  embed: { postHeight: true, targetOrigin: '*' }
 };
 
 /* ===================================================================
@@ -606,14 +607,28 @@ function render() {
   postHeight();
 }
 
-/* Hauteur vers le parent — uniquement si CONFIG.embed.postHeight est vrai ET si le parent l'écoute */
+/* Hauteur vers le parent (CONFIG.embed.postHeight). On mesure le contenu (#app), pas la fenêtre :
+   scrollHeight ne descendrait jamais sous la hauteur actuelle de l'iframe. Sans parent à l'écoute, aucun effet. */
+let heightTimer = 0;
 function postHeight() {
-  if (!CONFIG.embed.postHeight) return;
+  if (!CONFIG.embed.postHeight || document.readyState !== 'complete') return;
+  clearTimeout(heightTimer);
+  heightTimer = setTimeout(sendHeight, 30);   // regroupe les rafales de changements, attend la fin du chargement
+}
+function sendHeight() {
   try {
-    parent.postMessage({ type: 'sbm-iframe-height', component: CONFIG.componentId,
-      height: document.documentElement.scrollHeight }, CONFIG.embed.targetOrigin || '*');
+    const app = document.getElementById('app');
+    let height = Math.ceil(app.getBoundingClientRect().height);
+    const dlg = document.getElementById('dlg');                       // fenêtre modale éventuelle
+    if (dlg && dlg.open) height = Math.max(height, dlg.scrollHeight + 48);
+    parent.postMessage({ type: 'sbm-iframe-height', component: CONFIG.componentId, height }, CONFIG.embed.targetOrigin || '*');
   } catch (e) { /* sans effet */ }
 }
+window.addEventListener('load', postHeight);
+/* Le parent peut redemander la hauteur (ex. web part SharePoint quand l'iframe est chargée) */
+window.addEventListener('message', e => {
+  if (e.source === parent && e.source !== window && e.data && e.data.type === 'sbm-request-height') postHeight();
+});
 
 /* Initialisation */
 (function init() {
@@ -623,6 +638,7 @@ function postHeight() {
   }
   render();
   if (CONFIG.embed.postHeight && 'ResizeObserver' in window) new ResizeObserver(postHeight).observe(document.body);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(postHeight);
 })();
 </script>
 </body>
